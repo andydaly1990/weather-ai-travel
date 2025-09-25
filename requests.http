@@ -1,0 +1,14 @@
+### Get Weather for Dublin
+GET http://localhost:3000/api/weather?city=Dublin
+
+### Suggest AI travel plan
+POST http://localhost:3000/api/ai/suggest
+Content-Type: application/json
+
+{
+  "city": "Dublin",
+  "weather": {
+    "temp": 20,
+    "summary": "Clear"
+  }
+}
