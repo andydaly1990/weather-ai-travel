@@ -1,52 +1,68 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable prettier/prettier */
-import { Controller, Get, Query, BadRequestException } from '@nestjs/common';
+import { BadRequestException, Controller, Get, InternalServerErrorException, Query } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
-// Define the shape of the response this endpoint will return
-type WeatherResult = {
-  temp: number;    // A fake temperature (hardcoded for now)
-  summary: string; // A fake weather summary (hardcoded for now)
-  lat: number;     // Latitude of the requested city
-  lon: number;     // Longitude of the requested city
-};
+type WeatherResultDto = { temp: number; summary: string; lat: number; lon: number };
 
-// This controller will handle requests to routes starting with /weather
+type CacheKey = `${number},${number}`;
+const cache = new Map<CacheKey, { data: WeatherResultDto; expires: number }>();
+const TTL_MS = 5 * 60 * 1000;
+
 @Controller('weather')
 export class WeatherController {
+  constructor(private readonly config: ConfigService) {}
 
-  // Handles GET /weather requests
-  // Example: /weather?city=Paris
-  @Get()
-  async get(@Query('city') city?: string): Promise<WeatherResult> {
-
-    // 1) Validate the query parameter
-    // If no city is provided, or if it's just empty spaces → return HTTP 400
-    if (!city || !city.trim()) {
-      throw new BadRequestException('Query parameter "city" is required.');
-    }
-
-    // 2) Use the OpenStreetMap Nominatim API to convert the city into lat/lon
-    //    - q = city name
-    //    - format=json (return JSON)
-    //    - limit=1 (only one result)
-    const geoResp = await axios.get('https://nominatim.openstreetmap.org/search', {
+  private async geocode(city: string): Promise<{ lat: number; lon: number }> {
+    if (!city?.trim()) throw new BadRequestException('city is required');
+    const { data } = await axios.get('https://nominatim.openstreetmap.org/search', {
       params: { q: city, format: 'json', limit: 1 },
-      headers: { 'User-Agent': 'weather-ai-travel-app (dev)' }, // polite to include UA
-      timeout: 10_000, // 10 second timeout
-      validateStatus: (s) => s >= 200 && s < 500, // treat 4xx responses as "handled"
+      headers: { 'User-Agent': 'weather-ai-travel-dev' },
+      timeout: 10_000,
     });
+    if (!Array.isArray(data) || !data[0]) throw new BadRequestException(`Could not geocode "${city}"`);
+    return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+  }
 
-    // 3) If no location was found, return a harmless fake fallback
-    if (!Array.isArray(geoResp.data) || geoResp.data.length === 0) {
-      return { temp: 20, summary: 'Clear', lat: 51.5, lon: -0.09 };
+  private kToC(k: number) { return Math.round((k - 273.15) * 10) / 10 }
+
+  private mapOpenWeatherToSummary(code: number): string {
+    if (code >= 200 && code < 300) return 'Thunderstorm';
+    if (code >= 300 && code < 600) return 'Rain';
+    if (code >= 600 && code < 700) return 'Snow';
+    if (code === 800) return 'Clear';
+    if (code > 800) return 'Clouds';
+    return 'Unknown';
+  }
+
+  @Get()
+  async get(@Query('city') city: string): Promise<WeatherResultDto> {
+    const { lat, lon } = await this.geocode(city);
+
+    const key: CacheKey = `${lat},${lon}`;
+    const now = Date.now();
+    const hit = cache.get(key);
+    if (hit && hit.expires > now) return hit.data;
+  
+
+    const apiKey = this.config.get<string>('OPENWEATHER_API_KEY');
+    console.log('OPENWEATHER_API_KEY present?', Boolean(apiKey), apiKey?.slice(0, 4) + '****');
+    const baseUrl = this.config.get<string>('OPENWEATHER_BASE_URL') || 'https://api.openweathermap.org/data/2.5/weather';
+    if (!apiKey) throw new InternalServerErrorException('Weather API key not configured');
+
+    try {
+      const { data } = await axios.get(baseUrl, { params: { lat, lon, appid: apiKey }, timeout: 10_000 });
+      const temp = this.kToC(data?.main?.temp);
+      const code = data?.weather?.[0]?.id ?? 800;
+      const summary = this.mapOpenWeatherToSummary(code);
+      if (Number.isNaN(temp)) throw new Error('Invalid temperature from provider');
+
+      const result: WeatherResultDto = { temp, summary, lat, lon };
+      cache.set(key, { data: result, expires: now + TTL_MS });
+      return result;
+    } catch {
+      throw new InternalServerErrorException('Failed to fetch weather data');
     }
-
-    // Extract latitude/longitude from the geocoding result
-    const { lat, lon } = geoResp.data[0];
-
-    // 4) Return a simple "weather result" object
-    // Currently the weather values are hardcoded — only lat/lon are real
-    return { temp: 20, summary: 'Clear', lat: Number(lat), lon: Number(lon) };
   }
 }

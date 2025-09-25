@@ -3,14 +3,23 @@
 
   <form (ngSubmit)="onSearch()" style="display:flex;gap:.5rem;">
     <input [(ngModel)]="city" name="city" placeholder="City..." required />
-    <button type="submit">Search</button>
+    <button type="submit" [disabled]="state === 'loading'">Search</button>
   </form>
 
-  <!-- Keep the map in the DOM so Leaflet can initialize -->
-  <div id="map" style="height:300px;border:1px solid #ddd;border-radius:8px;margin-top:1rem;"></div>
+  <!-- Map stays mounted so Leaflet can initialize -->
+  <div style="position:relative;margin-top:1rem;">
+    <div id="map" style="height:300px;border:1px solid #ddd;border-radius:8px;"></div>
 
-  <!-- Weather + tips appear after search -->
-  <section *ngIf="weather" style="margin-top:1rem;">
+    <!-- simple loading overlay on the map area -->
+    <div *ngIf="state === 'loading'"
+         style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+                background:rgba(255,255,255,.7);backdrop-filter:blur(2px);font-weight:500;">
+      Loading…
+    </div>
+  </div>
+
+  <!-- Weather + tips appear only on success -->
+  <section *ngIf="weather && state === 'success'" style="margin-top:1rem;">
     <h2>{{ city }} – {{ weather.temp }}°C, {{ weather.summary }}</h2>
 
     <h3 style="margin-top:1rem;">AI Ideas</h3>
@@ -19,5 +28,8 @@
     </ul>
   </section>
 
-  <p *ngIf="error" style="color:#c00;margin-top:.5rem;">{{ error }}</p>
+  <!-- Friendly error message -->
+  <p *ngIf="state === 'error' && errorMsg" style="color:#c00;margin-top:.5rem;">
+    {{ errorMsg }}
+  </p>
 </div>
